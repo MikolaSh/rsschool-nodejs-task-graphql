@@ -268,6 +268,23 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     }),
   });
 
+  const CreatePostInput = new GraphQLInputObjectType({
+    name: 'CreatePostInput',
+    fields: () => ({
+      title: { type: new GraphQLNonNull(GraphQLString) },
+      content: { type: new GraphQLNonNull(GraphQLString) },
+      authorId: { type: new GraphQLNonNull(UUIDType) },
+    }),
+  });
+  
+  const ChangePostInput = new GraphQLInputObjectType({
+    name: 'ChangePostInput',
+    fields: () => ({
+      title: { type: GraphQLString },
+      content: { type: GraphQLString },
+    }),
+  });
+
   const Mutation = new GraphQLObjectType({
     name: "Mutation",
     fields: {
@@ -374,6 +391,72 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
         ) => {
           await prisma.profile.delete({
             where: { id: args.id },
+          });
+          return 'ok';
+        },
+      },
+      createPost: {
+        type: new GraphQLNonNull(PostGQL),
+        args: {
+          dto: { type: new GraphQLNonNull(CreatePostInput) },
+        },
+        resolve: async (
+          _: unknown,
+          args: { 
+            dto: { 
+              title: string; 
+              content: string; 
+              authorId: string 
+            } 
+          }
+        ) => {
+          return prisma.post.create({
+            data: {
+              title: args.dto.title,
+              content: args.dto.content,
+              authorId: args.dto.authorId
+            },
+          });
+        },
+      },
+      
+      changePost: {
+        type: new GraphQLNonNull(PostGQL),
+        args: {
+          id: { type: new GraphQLNonNull(UUIDType) },
+          dto: { type: new GraphQLNonNull(ChangePostInput) },
+        },
+        resolve: async (
+          _: unknown,
+          args: { 
+            id: string; 
+            dto: { 
+              title?: string; 
+              content?: string 
+            } 
+          }
+        ) => {
+          return prisma.post.update({
+            where: { id: args.id },
+            data: {
+              ...(args.dto.title !== undefined && { title: args.dto.title }),
+              ...(args.dto.content !== undefined && { content: args.dto.content }),
+            },
+          });
+        },
+      },
+      
+      deletePost: {
+        type: new GraphQLNonNull(GraphQLString),
+        args: {
+          id: { type: new GraphQLNonNull(UUIDType) },
+        },
+        resolve: async (
+          _: unknown,
+          args: { id: string }
+        ) => {
+          await prisma.post.delete({ 
+            where: { id: args.id } 
           });
           return 'ok';
         },
