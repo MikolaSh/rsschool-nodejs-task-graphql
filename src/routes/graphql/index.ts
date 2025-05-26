@@ -11,15 +11,16 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
   const { prisma } = fastify;
 
   const createLoader = <
-    T extends { id?: string; memberTypeId?: string | MemberTypeId },
+    T extends { id?: string; memberTypeId?: string | MemberTypeId } | null,
     K extends string | MemberTypeId
   >(
-    batchFn: (keys: readonly K[]) => Promise<T[]>
+    batchFn: (keys: readonly K[]) => Promise<(T | null)[]>
   ) => {
-    return new DataLoader<K, T>(async (keys) => {
+    return new DataLoader<K, T | null>(async (keys) => {
       const results = await batchFn(keys);
       return keys.map((key) => {
         const result = results.find((result) => {
+          if (!result) return false;
           if (result.id !== undefined && typeof key === 'string') {
             return result.id === key;
           }
@@ -27,27 +28,24 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
             return result.memberTypeId === key;
           }
           return false;
-        }); 
-
-        if (!result) {
-          return new Error(`No result for ${key}`);
-        }
-        return result;
+        });
+        return result || null;
       });
     });
   };
 
   const memberTypeLoader = createLoader<MemberType, MemberTypeId>(async (ids) => {
     const result = await prisma.memberType.findMany({
-      where: { id: { in: [...ids] } },
+      where: { id: { in: ids as MemberTypeId[] } },
     });
     return result;
   });
 
-  const postLoader = createLoader<Post, string>(async (ids) => {
-    return prisma.post.findMany({
+  const postLoader = createLoader<Post | null, string>(async (ids) => {
+    const posts = await prisma.post.findMany({
       where: { id: { in: [...ids] } },
     });
+    return ids.map(id => posts.find(post => post.id === id) || null);
   });
 
   const profileLoader = createLoader<Profile & { memberTypeId: MemberTypeId }, string>(
@@ -59,18 +57,32 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     }
   );
 
-  const userLoader = new DataLoader<string, User>(async (ids: readonly string[]) => {
+  const userLoader = new DataLoader<string, User | null>(async (ids) => {
     const users = await prisma.user.findMany({
-      where: { id: { in: [...ids] } }, // Преобразуем readonly в обычный массив
+      where: { id: { in: [...ids] } },
       include: {
-        userSubscribedTo: true,
-        subscribedToUser: true,
+        userSubscribedTo: {
+          include: {
+            author: true
+          }
+        },
+        subscribedToUser: {
+          include: {
+            subscriber: true
+          }
+        },
       },
     });
     
     return ids.map(id => {
       const user = users.find(u => u.id === id);
-      return user || new Error(`User not found: ${id}`);
+      if (!user) return null;
+      
+      return {
+        ...user,
+        userSubscribedTo: user.userSubscribedTo?.map(sub => sub.author) || [],
+        subscribedToUser: user.subscribedToUser?.map(sub => sub.subscriber) || []
+      };
     });
   });
 
@@ -135,8 +147,8 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       },
       userSubscribedTo: {
         type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(UserGQL))),
-        resolve: async (source: User & { userSubscribedTo?: User[] }): Promise<User[]> => {
-          if ('userSubscribedTo' in source && source.userSubscribedTo) {
+        resolve: (source: User & { userSubscribedTo?: User[] }) => {
+          if (source.userSubscribedTo) {
             return source.userSubscribedTo;
           }
           return prisma.user.findMany({
@@ -145,13 +157,17 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
                 some: { subscriberId: source.id } 
               } 
             },
+            include: {
+              userSubscribedTo: true,
+              subscribedToUser: true,
+            },
           });
         },
       },
       subscribedToUser: {
         type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(UserGQL))),
-        resolve: async (source: User & { subscribedToUser?: User[] }): Promise<User[]> => {
-          if ('subscribedToUser' in source && source.subscribedToUser) {
+        resolve: (source: User & { subscribedToUser?: User[] }) => {
+          if (source.subscribedToUser) {
             return source.subscribedToUser;
           }
           return prisma.user.findMany({
@@ -159,6 +175,10 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
               userSubscribedTo: { 
                 some: { authorId: source.id } 
               } 
+            },
+            include: {
+              userSubscribedTo: true,
+              subscribedToUser: true,
             },
           });
         },
@@ -208,15 +228,8 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       user: {
         type: UserGQL as GraphQLObjectType,
         args: { id: { type: new GraphQLNonNull(UUIDType) } },
-        resolve: (
-          _parent: unknown,
-          args: { id: string }, // Явная типизация аргументов
-          _context: unknown,
-          _info: GraphQLResolveInfo
-        ): Promise<User> => {
-          return userLoader.load(args.id); // Теперь безопасно
-        },
-      }
+        resolve: (_, args: { id: string }) => userLoader.load(args.id),
+      },
     }
   });
 
@@ -237,7 +250,8 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       return graphql({
         schema,
         source: req.body.query,
-        contextValue: { prisma, loaders: { memberTypeLoader } },
+        variableValues: req.body.variables,
+        contextValue: { prisma, loaders: { memberTypeLoader, userLoader, postLoader, profileLoader } },
       });
     },
   });
