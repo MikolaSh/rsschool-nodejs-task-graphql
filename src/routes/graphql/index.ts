@@ -460,6 +460,46 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
           });
           return 'ok';
         },
+      },
+      subscribeTo: {
+        type: new GraphQLNonNull(GraphQLString),
+        args: {
+          userId: { type: new GraphQLNonNull(UUIDType) },
+          authorId: { type: new GraphQLNonNull(UUIDType) },
+        },
+        resolve: async (
+          _: unknown,
+          args: { userId: string; authorId: string }
+        ): Promise<string> => {
+          await prisma.subscribersOnAuthors.create({
+            data: {
+              subscriberId: args.userId,
+              authorId: args.authorId,
+            },
+          });
+          return 'ok';
+        },
+      },
+      unsubscribeFrom: {
+        type: new GraphQLNonNull(GraphQLString),
+        args: {
+          userId: { type: new GraphQLNonNull(UUIDType) },
+          authorId: { type: new GraphQLNonNull(UUIDType) },
+        },
+        resolve: async (
+          _: unknown,
+          args: { userId: string; authorId: string }
+        ): Promise<string> => {
+          await prisma.subscribersOnAuthors.delete({
+            where: {
+              subscriberId_authorId: {
+                subscriberId: args.userId,
+                authorId: args.authorId,
+              },
+            },
+          });
+          return 'ok';
+        },
       }
     }
   })
