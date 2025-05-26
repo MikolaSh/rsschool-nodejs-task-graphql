@@ -1,10 +1,11 @@
 import { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { createGqlResponseSchema, gqlResponseSchema } from './schemas.js';
-import { graphql, GraphQLBoolean, GraphQLEnumType, GraphQLFloat, GraphQLInt, GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLSchema, GraphQLString, validate } from 'graphql';
-import { MemberType, Post, Profile } from '@prisma/client';
+import { graphql, GraphQLBoolean, GraphQLEnumType, GraphQLFloat, GraphQLInt, GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLResolveInfo, GraphQLSchema, GraphQLString, validate } from 'graphql';
+import { MemberType, Post, Profile, User } from '@prisma/client';
 import { MemberTypeId } from '../member-types/schemas.js';
 import DataLoader from 'dataloader';
 import { UUIDType } from './types/uuid.js';
+import { parseResolveInfo, ResolveTree } from 'graphql-parse-resolve-info';
 
 const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
   const { prisma } = fastify;
@@ -58,6 +59,21 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     }
   );
 
+  const userLoader = new DataLoader<string, User>(async (ids: readonly string[]) => {
+    const users = await prisma.user.findMany({
+      where: { id: { in: [...ids] } }, // Преобразуем readonly в обычный массив
+      include: {
+        userSubscribedTo: true,
+        subscribedToUser: true,
+      },
+    });
+    
+    return ids.map(id => {
+      const user = users.find(u => u.id === id);
+      return user || new Error(`User not found: ${id}`);
+    });
+  });
+
   const MemberTypeIdGQL = new GraphQLEnumType({
     name: "MemberTypeId",
     values: {
@@ -92,7 +108,63 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       yearOfBirth: { type: new GraphQLNonNull(GraphQLInt)},
       memberType: { type: new GraphQLNonNull(MemberTypeGQL), resolve: (source: {memberTypeId: MemberTypeId}) => memberTypeLoader.load(source.memberTypeId)}
     })
-  })
+  });
+
+  const UserGQL = new GraphQLObjectType({
+    name: "User",
+    fields: () => ({
+      id: {type: new GraphQLNonNull(UUIDType)},
+      name: {type: new GraphQLNonNull(GraphQLString)},
+      balance: {type: new GraphQLNonNull(GraphQLFloat)},
+      profile: {
+        type: ProfileGQL,
+        resolve: async (source: User, _args: object, _context: unknown, info: GraphQLResolveInfo): Promise<Profile | null> => {
+          const parsedInfo = parseResolveInfo(info) as ResolveTree | null;
+          
+          if (parsedInfo?.fieldsByTypeName.Profile) {
+            return prisma.profile.findUnique({ 
+              where: { userId: source.id } 
+            });
+          }
+          return null;
+        },
+      },
+      posts: {
+        type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(PostGQL))),
+        resolve: (source) => prisma.post.findMany({ where: { authorId: source.id } }),
+      },
+      userSubscribedTo: {
+        type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(UserGQL))),
+        resolve: async (source: User & { userSubscribedTo?: User[] }): Promise<User[]> => {
+          if ('userSubscribedTo' in source && source.userSubscribedTo) {
+            return source.userSubscribedTo;
+          }
+          return prisma.user.findMany({
+            where: { 
+              subscribedToUser: { 
+                some: { subscriberId: source.id } 
+              } 
+            },
+          });
+        },
+      },
+      subscribedToUser: {
+        type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(UserGQL))),
+        resolve: async (source: User & { subscribedToUser?: User[] }): Promise<User[]> => {
+          if ('subscribedToUser' in source && source.subscribedToUser) {
+            return source.subscribedToUser;
+          }
+          return prisma.user.findMany({
+            where: { 
+              userSubscribedTo: { 
+                some: { authorId: source.id } 
+              } 
+            },
+          });
+        },
+      }
+    }),
+  });
 
   const RootQueryType = new GraphQLObjectType({
     name: 'RootQuery',
@@ -123,6 +195,27 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
         type: ProfileGQL,
         args: { id: { type: new GraphQLNonNull(UUIDType) } },
         resolve: (_, args: { id: string }) => profileLoader.load(args.id),
+      },
+      users: {
+        type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(UserGQL))),
+        resolve: () => prisma.user.findMany({
+          include: {
+            userSubscribedTo: true,
+            subscribedToUser: true,
+          },
+        }),
+      },
+      user: {
+        type: UserGQL as GraphQLObjectType,
+        args: { id: { type: new GraphQLNonNull(UUIDType) } },
+        resolve: (
+          _parent: unknown,
+          args: { id: string }, // Явная типизация аргументов
+          _context: unknown,
+          _info: GraphQLResolveInfo
+        ): Promise<User> => {
+          return userLoader.load(args.id); // Теперь безопасно
+        },
       }
     }
   });
