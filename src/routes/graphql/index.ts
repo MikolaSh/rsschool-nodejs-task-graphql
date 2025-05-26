@@ -1,6 +1,6 @@
 import { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { createGqlResponseSchema, gqlResponseSchema } from './schemas.js';
-import { graphql, GraphQLBoolean, GraphQLEnumType, GraphQLFloat, GraphQLInt, GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLResolveInfo, GraphQLSchema, GraphQLString, validate } from 'graphql';
+import { graphql, GraphQLBoolean, GraphQLEnumType, GraphQLFloat, GraphQLInputObjectType, GraphQLInt, GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLResolveInfo, GraphQLSchema, GraphQLString, validate } from 'graphql';
 import { MemberType, Post, Profile, User } from '@prisma/client';
 import { MemberTypeId } from '../member-types/schemas.js';
 import DataLoader from 'dataloader';
@@ -233,8 +233,66 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     }
   });
 
+  const CreateUserInput = new GraphQLInputObjectType({
+    name: "CreateUserInput",
+    fields: () => ({
+      name: { type: new GraphQLNonNull(GraphQLString) },
+      balance: { type: new GraphQLNonNull(GraphQLFloat) },
+    })
+  });
+
+  const ChangeUserInput = new GraphQLInputObjectType({
+    name: 'ChangeUserInput',
+    fields: () => ({
+      name: { type: GraphQLString },
+      balance: { type: GraphQLFloat },
+    }),
+  });
+
+  const Mutation = new GraphQLObjectType({
+    name: "Mutation",
+    fields: {
+      createUser: {
+        type: new GraphQLNonNull(UserGQL),
+        args: {
+          dto: { type: new GraphQLNonNull(CreateUserInput) },
+        },
+        resolve: (_, args: { dto: { name: string; balance: number } }) => {
+          return prisma.user.create({
+            data: args.dto,
+          });
+        },
+      },
+      changeUser: {
+        type: new GraphQLNonNull(UserGQL),
+        args: {
+          id: { type: new GraphQLNonNull(UUIDType) },
+          dto: { type: new GraphQLNonNull(ChangeUserInput) },
+        },
+        resolve: (_, args: { id: string; dto: { name?: string; balance?: number } }) => {
+          return prisma.user.update({
+            where: { id: args.id },
+            data: args.dto,
+          });
+        },
+      },
+      deleteUser: {
+        type: new GraphQLNonNull(GraphQLString),
+        args: {
+          id: { type: new GraphQLNonNull(UUIDType) },
+        },
+        resolve: (_, args: { id: string }) => {
+          return prisma.user.delete({ 
+            where: { id: args.id } 
+          }).then(() => 'ok');
+        },
+      },
+    }
+  })
+
   const schema = new GraphQLSchema({
     query: RootQueryType,
+    mutation: Mutation,
   });
 
   fastify.route({
