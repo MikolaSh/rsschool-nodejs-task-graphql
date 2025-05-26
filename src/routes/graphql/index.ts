@@ -1,7 +1,7 @@
 import { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { createGqlResponseSchema, gqlResponseSchema } from './schemas.js';
-import { graphql, GraphQLEnumType, GraphQLFloat, GraphQLInt, GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLSchema, GraphQLString, validate } from 'graphql';
-import { MemberType, Post } from '@prisma/client';
+import { graphql, GraphQLBoolean, GraphQLEnumType, GraphQLFloat, GraphQLInt, GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLSchema, GraphQLString, validate } from 'graphql';
+import { MemberType, Post, Profile } from '@prisma/client';
 import { MemberTypeId } from '../member-types/schemas.js';
 import DataLoader from 'dataloader';
 import { UUIDType } from './types/uuid.js';
@@ -10,7 +10,7 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
   const { prisma } = fastify;
 
   const createLoader = <
-    T extends { id?: string; memberTypeId?: MemberTypeId },
+    T extends { id?: string; memberTypeId?: string | MemberTypeId },
     K extends string | MemberTypeId
   >(
     batchFn: (keys: readonly K[]) => Promise<T[]>
@@ -36,6 +36,28 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     });
   };
 
+  const memberTypeLoader = createLoader<MemberType, MemberTypeId>(async (ids) => {
+    const result = await prisma.memberType.findMany({
+      where: { id: { in: [...ids] } },
+    });
+    return result;
+  });
+
+  const postLoader = createLoader<Post, string>(async (ids) => {
+    return prisma.post.findMany({
+      where: { id: { in: [...ids] } },
+    });
+  });
+
+  const profileLoader = createLoader<Profile & { memberTypeId: MemberTypeId }, string>(
+    async (ids) => {
+      const profiles = await prisma.profile.findMany({
+        where: { id: { in: [...ids] } },
+      });
+      return profiles as (Profile & { memberTypeId: MemberTypeId })[];
+    }
+  );
+
   const MemberTypeIdGQL = new GraphQLEnumType({
     name: "MemberTypeId",
     values: {
@@ -53,20 +75,6 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     })
   });
 
-
-  const memberTypeLoader = createLoader<MemberType, MemberTypeId>(async (ids) => {
-    const result = await prisma.memberType.findMany({
-      where: { id: { in: [...ids] } },
-    });
-    return result;
-  });
-
-  const postLoader = createLoader<Post, string>(async (ids) => {
-    return prisma.post.findMany({
-      where: { id: { in: [...ids] } },
-    });
-  });
-
   const PostGQL = new GraphQLObjectType({
     name: 'Post',
     fields: () => ({
@@ -76,6 +84,15 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     }),
   });
 
+  const ProfileGQL = new GraphQLObjectType({
+    name: "Profile",
+    fields: () => ({
+      id: { type: new GraphQLNonNull(UUIDType)},
+      isMale: { type: new GraphQLNonNull(GraphQLBoolean)},
+      yearOfBirth: { type: new GraphQLNonNull(GraphQLInt)},
+      memberType: { type: new GraphQLNonNull(MemberTypeGQL), resolve: (source: {memberTypeId: MemberTypeId}) => memberTypeLoader.load(source.memberTypeId)}
+    })
+  })
 
   const RootQueryType = new GraphQLObjectType({
     name: 'RootQuery',
@@ -98,6 +115,15 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
         args: { id: { type: new GraphQLNonNull(UUIDType) } },
         resolve: (_, args: {id: string }) => postLoader.load(args.id),
       },
+      profiles: {
+        type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(ProfileGQL))),
+        resolve: () => prisma.profile.findMany(),
+      },
+      profile: {
+        type: ProfileGQL,
+        args: { id: { type: new GraphQLNonNull(UUIDType) } },
+        resolve: (_, args: { id: string }) => profileLoader.load(args.id),
+      }
     }
   });
 
