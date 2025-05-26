@@ -1,9 +1,10 @@
 import { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { createGqlResponseSchema, gqlResponseSchema } from './schemas.js';
-import { graphql, GraphQLEnumType, GraphQLFloat, GraphQLInt, GraphQLNonNull, GraphQLObjectType, validate } from 'graphql';
-import { MemberType } from '@prisma/client';
+import { graphql, GraphQLEnumType, GraphQLFloat, GraphQLInt, GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLSchema, GraphQLString, validate } from 'graphql';
+import { MemberType, Post } from '@prisma/client';
 import { MemberTypeId } from '../member-types/schemas.js';
 import DataLoader from 'dataloader';
+import { UUIDType } from './types/uuid.js';
 
 const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
   const { prisma } = fastify;
@@ -60,8 +61,24 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     return result;
   });
 
+  const postLoader = createLoader<Post, string>(async (ids) => {
+    return prisma.post.findMany({
+      where: { id: { in: [...ids] } },
+    });
+  });
+
+  const PostGQL = new GraphQLObjectType({
+    name: 'Post',
+    fields: () => ({
+      id: { type: new GraphQLNonNull(UUIDType) },
+      title: { type: new GraphQLNonNull(GraphQLString) },
+      content: { type: new GraphQLNonNull(GraphQLString) },
+    }),
+  });
+
 
   const RootQueryType = new GraphQLObjectType({
+    name: 'RootQuery',
     fields: {
       memberTypes: {
         type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(MemberTypeGQL))),
@@ -70,10 +87,23 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       memberType: {
         type: MemberTypeGQL,
         args: { id: { type: new GraphQLNonNull(MemberTypeIdGQL) } },
-        resolve: (_, args) => memberTypeLoader.load(args.id),
+        resolve: (_: unknown, args: { id: MemberTypeId }) => memberTypeLoader.load(args.id),
+      },
+      posts: {
+        type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(PostGQL))),
+        resolve: () => prisma.post.findMany(),
+      },
+      post: {
+        type: PostGQL,
+        args: { id: { type: new GraphQLNonNull(UUIDType) } },
+        resolve: (_, args: {id: string }) => postLoader.load(args.id),
       },
     }
-  })
+  });
+
+  const schema = new GraphQLSchema({
+    query: RootQueryType,
+  });
 
   fastify.route({
     url: '/',
@@ -85,7 +115,11 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       },
     },
     async handler(req) {
-      // return graphql();
+      return graphql({
+        schema,
+        source: req.body.query,
+        contextValue: { prisma, loaders: { memberTypeLoader } },
+      });
     },
   });
 };
