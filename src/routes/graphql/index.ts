@@ -249,6 +249,25 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     }),
   });
 
+  const CreateProfileInput = new GraphQLInputObjectType({
+    name: "CreateProfileInput",
+    fields: () => ({
+      isMale: { type: new GraphQLNonNull(GraphQLBoolean) },
+      yearOfBirth: { type: new GraphQLNonNull(GraphQLInt) },
+      userId: { type: new GraphQLNonNull(UUIDType) },
+      memberTypeId: { type: new GraphQLNonNull(MemberTypeIdGQL) },
+    })
+  });
+
+  const ChangeProfileInput = new GraphQLInputObjectType({
+    name: 'ChangeProfileInput',
+    fields: () => ({
+      isMale: { type: GraphQLBoolean },
+      yearOfBirth: { type: GraphQLInt },
+      memberTypeId: { type: MemberTypeIdGQL },
+    }),
+  });
+
   const Mutation = new GraphQLObjectType({
     name: "Mutation",
     fields: {
@@ -287,6 +306,78 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
           }).then(() => 'ok');
         },
       },
+      createProfile: {
+        type: new GraphQLNonNull(ProfileGQL),
+        args: {
+          dto: { type: new GraphQLNonNull(CreateProfileInput) },
+        },
+        resolve: async (
+          _: unknown, 
+          args: { 
+            dto: { 
+              isMale: boolean; 
+              yearOfBirth: number; 
+              userId: string; 
+              memberTypeId: string 
+            } 
+          }
+        ) => {
+          return prisma.profile.create({
+            data: {
+              isMale: args.dto.isMale,
+              yearOfBirth: args.dto.yearOfBirth,
+              userId: args.dto.userId,
+              memberTypeId: args.dto.memberTypeId as MemberTypeId,
+            },
+          });
+        },
+      },
+      changeProfile: {
+        type: new GraphQLNonNull(ProfileGQL),
+        args: {
+          id: { type: new GraphQLNonNull(UUIDType) },
+          dto: { type: new GraphQLNonNull(ChangeProfileInput) },
+        },
+        resolve: async (
+          _: unknown,
+          args: {
+            id: string;
+            dto: {
+              isMale?: boolean;
+              yearOfBirth?: number;
+              memberTypeId?: string;
+            }
+          }
+        ) => {
+          return prisma.profile.update({
+            where: { id: args.id },
+            data: {
+              ...(args.dto.isMale !== undefined && { isMale: args.dto.isMale }),
+              ...(args.dto.yearOfBirth !== undefined && { 
+                yearOfBirth: args.dto.yearOfBirth 
+              }),
+              ...(args.dto.memberTypeId !== undefined && {
+                memberTypeId: args.dto.memberTypeId as MemberTypeId
+              }),
+            },
+          });
+        },
+      },
+      deleteProfile: {
+        type: new GraphQLNonNull(GraphQLString),
+        args: {
+          id: { type: new GraphQLNonNull(UUIDType) },
+        },
+        resolve: async (
+          _: unknown,
+          args: { id: string }
+        ) => {
+          await prisma.profile.delete({
+            where: { id: args.id },
+          });
+          return 'ok';
+        },
+      }
     }
   })
 
